@@ -8,6 +8,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -18,4 +22,23 @@ jobs:
       - name: Test
         run: go test ./...
       - name: Build
-        run: go build ./cmd/tplr
+        id: build
+        run: |
+          name=tplr-${{ matrix.goos }}-${{ matrix.goarch }}
+          ext=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o $name$ext ./cmd/tplr
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip ${name}.zip $name$ext
+            echo "artifact=${name}.zip" >> "$GITHUB_OUTPUT"
+            rm $name$ext
+          else
+            tar -czf ${name}.tar.gz $name$ext
+            echo "artifact=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+            rm $name$ext
+          fi
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.artifact }}
+          path: ${{ steps.build.outputs.artifact }}
