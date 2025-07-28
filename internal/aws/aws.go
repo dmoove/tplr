@@ -13,9 +13,17 @@ import (
 )
 
 // Client wraps AWS SDK clients.
+type ssmClient interface {
+	GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
+}
+
+type secretsManagerClient interface {
+	GetSecretValue(ctx context.Context, params *secretsmanager.GetSecretValueInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
+}
+
 type Client struct {
-	ssm    *ssm.Client
-	secret *secretsmanager.Client
+	ssm    ssmClient
+	secret secretsManagerClient
 }
 
 // New initializes AWS SDK clients using default config.
