@@ -2,18 +2,30 @@
 
 A command line tool that replaces secret placeholders in configuration files.
 
-Placeholders have the form `{{aws:ssm:PARAM}}` or `{{aws:secretsmanager:SECRET#KEY}}`.
-The path portion can be templated using the variable `env` and the function `toLower`.
+## Placeholders
+
+| Form | Source |
+| --- | --- |
+| `{{aws:ssm:PARAM}}` | AWS SSM Parameter Store (decrypted) |
+| `{{aws:secretsmanager:SECRET}}` | AWS Secrets Manager (raw string) |
+| `{{aws:secretsmanager:SECRET#KEY}}` | AWS Secrets Manager (JSON, key extracted) |
+| `{{env:VAR}}` | Environment variable |
+| `{{file:/path}}` | File contents (trailing newline trimmed) |
+
+The path portion of any placeholder can be templated using the function `env`
+and the function `toLower`.
 
 Example YAML:
 
 ```yaml
 passwordSSM: {{aws:ssm:app/{{env | toLower}}/dbPassword}}
-passwordSecertsManagerNoJSON: {{aws:secretsmanager:app/{{env | toLower}}/dbPassword}}
-passwordSecertsManagerJSON: {{aws:secretsmanager:app/{{env | toLower}}/db#Password}}
+passwordSecretsManagerNoJSON: {{aws:secretsmanager:app/{{env | toLower}}/dbPassword}}
+passwordSecretsManagerJSON: {{aws:secretsmanager:app/{{env | toLower}}/db#Password}}
+apiUser: {{env:API_USER}}
+tlsCert: {{file:/etc/tls/cert.pem}}
 ```
 
-Usage:
+## Usage
 
 ```bash
 tplr --source config.yml.tmpl --dest config.yml --env DEV
@@ -21,7 +33,27 @@ tplr --source config.yml.tmpl --dest config.yml --env DEV
 
 The processed file is printed to stdout if `--dest` is not provided.
 
-Currently AWS SSM Parameter Store and AWS Secrets Manager are supported.
+### Flags
+
+| Flag | Description |
+| --- | --- |
+| `--source`, `--file` | Template file or glob pattern (required) |
+| `--dest`, `--out` | Output file (default: stdout) |
+| `--out-dir` | Output directory when `--source` matches multiple files; the template extension (`.tmpl`/`.tpl`/`.template`) is stripped |
+| `--in-place` | Overwrite each source file with its rendered output |
+| `--env` | Environment name (defaults to `$ENV`) |
+| `--left`, `--right` | Placeholder delimiters (default `{{` and `}}`); custom delimiters must not contain `{` or `}` |
+| `--ignore-missing` | Leave placeholders untouched instead of failing when they cannot be resolved |
+| `--dry-run` | Resolve placeholders (to verify they exist) but mask the values and write nothing |
+| `--version` | Print version and exit |
+
+By default tplr exits non-zero if any placeholder cannot be resolved, so a
+broken render never silently produces an incomplete config. Repeated references
+to the same parameter/secret are looked up only once per run.
+
+Supported sources are AWS SSM Parameter Store, AWS Secrets Manager, environment
+variables and files. Templates that use only `env`/`file` sources do not require
+AWS credentials.
 
 ## Build
 
