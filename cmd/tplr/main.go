@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"tplr/internal/template"
+	"github.com/dmoove/tplr/internal/template"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".

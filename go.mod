@@ -1,4 +1,4 @@
-module tplr
+module github.com/dmoove/tplr
 
 go 1.24.3
 

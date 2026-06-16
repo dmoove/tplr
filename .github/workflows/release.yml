@@ -37,8 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux, darwin, windows]
-        goarch: [amd64]
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -117,4 +121,79 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           build-args: VERSION=${{ needs.release-please.outputs.tag_name }}
-          provenance: false
+          sbom: true
+          provenance: mode=max
+
+  # Generate a source SBOM (SPDX, including Go module dependencies) and attach it
+  # to the release.
+  sbom:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: tplr-${{ needs.release-please.outputs.tag_name }}-sbom.spdx.json
+      - name: Upload SBOM to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ needs.release-please.outputs.tag_name }} tplr-${{ needs.release-please.outputs.tag_name }}-sbom.spdx.json --clobber
+
+  # Update the Homebrew formula in the tap repository. Runs only when a
+  # HOMEBREW_TAP_TOKEN secret with write access to dmoove/homebrew-tap is set,
+  # otherwise the step is skipped (release stays green). Needs the release
+  # archives, so it runs after upload-assets.
+  homebrew:
+    needs: [release-please, upload-assets]
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for tap token
+        id: gate
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -n "${HOMEBREW_TAP_TOKEN}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Homebrew tap token not set; skipping formula update."
+          fi
+      - uses: actions/checkout@v4
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+      - name: Render and push formula
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          export VERSION="${TAG#v}"
+          export BASE="https://github.com/${REPO}/releases/download/${TAG}"
+          tmp="$(mktemp -d)"
+          for pair in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64; do
+            f="tplr-${pair}.tar.gz"
+            gh release download "${TAG}" --repo "${REPO}" --pattern "${f}" --dir "${tmp}"
+            digest="$(sha256sum "${tmp}/${f}" | cut -d' ' -f1)"
+            var="SHA_$(echo "${pair}" | tr 'a-z-' 'A-Z_')"
+            export "${var}=${digest}"
+          done
+
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/dmoove/homebrew-tap.git" "${tmp}/tap"
+          mkdir -p "${tmp}/tap/Formula"
+          envsubst < .github/homebrew/tplr.rb.tmpl > "${tmp}/tap/Formula/tplr.rb"
+          cd "${tmp}/tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/tplr.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date."
+          else
+            git commit -m "tplr ${VERSION}"
+            git push
+          fi

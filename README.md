@@ -80,6 +80,25 @@ Make sure the configured credentials belong to the same partition; commercial
 credentials are rejected by ESC (and vice versa) with
 `UnrecognizedClientException`.
 
+## Install
+
+Homebrew (macOS/Linux):
+
+```bash
+brew install dmoove/tap/tplr
+```
+
+With the Go toolchain:
+
+```bash
+go install github.com/dmoove/tplr/cmd/tplr@latest
+```
+
+Or grab a prebuilt binary (`linux`/`darwin` for `amd64`/`arm64`, `windows`
+`amd64`) from the [releases page](https://github.com/dmoove/tplr/releases). Each
+release also ships an SPDX SBOM (`tplr-<version>-sbom.spdx.json`), and the
+container images carry SBOM and provenance attestations.
+
 ## Build
 
 Compile the binary for your platform:
@@ -87,7 +106,7 @@ Compile the binary for your platform:
 ```bash
 go build -o tplr ./cmd/tplr            # build for current OS/arch
 GOOS=linux GOARCH=amd64 go build -o tplr-linux ./cmd/tplr
-GOOS=darwin GOARCH=amd64 go build -o tplr-darwin ./cmd/tplr
+GOOS=darwin GOARCH=arm64 go build -o tplr-darwin ./cmd/tplr
 GOOS=windows GOARCH=amd64 go build -o tplr.exe ./cmd/tplr
 ```
 
