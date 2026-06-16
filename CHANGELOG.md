@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/dmoove/tplr/compare/v0.3.0...v0.4.0) (2026-06-16)
+
+
+### Features
+
+* publish multi-arch container images to GHCR and Docker Hub ([#11](https://github.com/dmoove/tplr/issues/11)) ([4ada0fa](https://github.com/dmoove/tplr/commit/4ada0faabf5ae4bc5a6549ba5d06783250bb6ddb))
+
 ## [0.3.0](https://github.com/dmoove/tplr/compare/v0.2.0...v0.3.0) (2026-06-16)
 
 
