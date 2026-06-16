@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dmoove/tplr/internal/aws"
 	"github.com/dmoove/tplr/internal/template"
 )
 
@@ -50,7 +51,7 @@ func main() {
 	flag.StringVar(&outDir, "out-dir", "", "output directory when rendering multiple files (template extension is stripped)")
 	flag.BoolVar(&inPlace, "in-place", false, "overwrite each source file with its rendered output")
 	flag.StringVar(&env, "env", os.Getenv("ENV"), "environment name")
-	flag.StringVar(&region, "region", os.Getenv("AWS_REGION"), "AWS region for SSM/Secrets Manager (e.g. eusc-de-east-1 for the European Sovereign Cloud); defaults to $AWS_REGION")
+	flag.StringVar(&region, "region", os.Getenv("AWS_REGION"), "AWS region for SSM/Secrets Manager/S3 (e.g. eusc-de-east-1 for the European Sovereign Cloud); defaults to $AWS_REGION")
 	flag.StringVar(&left, "left", "{{", "left placeholder delimiter")
 	flag.StringVar(&right, "right", "}}", "right placeholder delimiter")
 	flag.BoolVar(&ignoreMissing, "ignore-missing", false, "leave placeholders untouched instead of failing when they cannot be resolved")
@@ -73,18 +74,6 @@ func main() {
 		log.Fatal("-source is required")
 	}
 
-	matches, err := filepath.Glob(source)
-	if err != nil {
-		log.Fatalf("invalid source pattern: %v", err)
-	}
-	if len(matches) == 0 {
-		log.Fatalf("no files match %q", source)
-	}
-	multiple := len(matches) > 1
-	if multiple && !inPlace && !dryRun && !validate && outDir == "" {
-		log.Fatal("-out-dir or -in-place is required when -source matches multiple files")
-	}
-
 	opts := template.Options{
 		Env:           env,
 		Region:        region,
@@ -105,44 +94,106 @@ func main() {
 		defer cancel()
 	}
 
+	remote := strings.HasPrefix(source, "s3://")
+	if remote && (inPlace || outDir != "") {
+		log.Fatal("--in-place and --out-dir are not supported with an s3:// source")
+	}
+
+	sources, err := gatherSources(ctx, source, region, retries)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	multiple := len(sources) > 1
+	if multiple && !inPlace && !dryRun && !validate && outDir == "" {
+		log.Fatal("-out-dir or -in-place is required when -source matches multiple files")
+	}
+
 	if validate {
-		runValidate(ctx, matches, opts)
+		runValidate(ctx, sources, opts)
 		return
 	}
 
-	for _, src := range matches {
-		data, err := os.ReadFile(src)
+	for _, s := range sources {
+		result, err := template.Process(ctx, s.data, opts)
 		if err != nil {
-			log.Fatalf("read %s: %v", src, err)
+			log.Fatalf("process %s: %v", s.name, err)
 		}
-		result, err := template.Process(ctx, string(data), opts)
-		if err != nil {
-			log.Fatalf("process %s: %v", src, err)
-		}
-		if err := writeResult(src, result, dest, outDir, inPlace, dryRun, multiple); err != nil {
-			log.Fatalf("write output for %s: %v", src, err)
+		if err := writeResult(s.name, result, dest, outDir, inPlace, dryRun, multiple); err != nil {
+			log.Fatalf("write output for %s: %v", s.name, err)
 		}
 	}
 }
 
-// runValidate resolves every placeholder in every file, reporting all failures
-// without writing any output. It exits non-zero if any file fails.
-func runValidate(ctx context.Context, matches []string, opts template.Options) {
+// namedSource is a template to render together with a human-readable name used
+// for output paths and diagnostics.
+type namedSource struct {
+	name string
+	data string
+}
+
+// gatherSources loads the templates referenced by source. An s3://bucket/key URI
+// downloads a single remote template; anything else is treated as a local file
+// or glob pattern.
+func gatherSources(ctx context.Context, source, region string, retries int) ([]namedSource, error) {
+	if strings.HasPrefix(source, "s3://") {
+		data, err := readS3Source(ctx, source, region, retries)
+		if err != nil {
+			return nil, err
+		}
+		return []namedSource{{name: source, data: data}}, nil
+	}
+
+	matches, err := filepath.Glob(source)
+	if err != nil {
+		return nil, fmt.Errorf("invalid source pattern: %w", err)
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no files match %q", source)
+	}
+	sources := make([]namedSource, 0, len(matches))
+	for _, m := range matches {
+		data, err := os.ReadFile(m)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", m, err)
+		}
+		sources = append(sources, namedSource{name: m, data: string(data)})
+	}
+	return sources, nil
+}
+
+// readS3Source downloads a template stored in S3. S3 holds the configuration
+// template; secret values are still resolved from SSM/Secrets Manager while
+// rendering.
+func readS3Source(ctx context.Context, uri, region string, retries int) (string, error) {
+	rest := strings.TrimPrefix(uri, "s3://")
+	bucket, key, ok := strings.Cut(rest, "/")
+	if !ok || bucket == "" || key == "" {
+		return "", fmt.Errorf("invalid s3 source %q: expected s3://bucket/key", uri)
+	}
+	client, err := aws.New(ctx, region, retries)
+	if err != nil {
+		return "", fmt.Errorf("init aws: %w", err)
+	}
+	data, err := client.S3(ctx, bucket, key)
+	if err != nil {
+		return "", fmt.Errorf("download %s: %w", uri, err)
+	}
+	return data, nil
+}
+
+// runValidate resolves every placeholder in every source, reporting all failures
+// without writing any output. It exits non-zero if any source fails.
+func runValidate(ctx context.Context, sources []namedSource, opts template.Options) {
 	opts.IgnoreMissing = false
 	failed := false
-	for _, src := range matches {
-		data, err := os.ReadFile(src)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", src, err)
+	for _, s := range sources {
+		if _, err := template.Process(ctx, s.data, opts); err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", s.name, err)
 			failed = true
 			continue
 		}
-		if _, err := template.Process(ctx, string(data), opts); err != nil {
-			fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", src, err)
-			failed = true
-			continue
-		}
-		fmt.Printf("OK   %s\n", src)
+		fmt.Printf("OK   %s\n", s.name)
 	}
 	if failed {
 		os.Exit(1)
