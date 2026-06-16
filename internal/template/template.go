@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strconv"
@@ -271,7 +272,7 @@ func (p *processor) resolveBase(spec string) baseResult {
 		}
 		val, ok := os.LookupEnv(name)
 		if !ok {
-			return baseResult{handled: true, err: fmt.Errorf("environment variable %s not set", name)}
+			return baseResult{handled: true, err: aws.NotFound("environment variable %s not set", name)}
 		}
 		return baseResult{value: val, handled: true}
 	case strings.HasPrefix(spec, "file:"):
@@ -281,6 +282,9 @@ func (p *processor) resolveBase(spec string) baseResult {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return baseResult{handled: true, err: aws.NotFound("file %s not found", path)}
+			}
 			return baseResult{handled: true, err: fmt.Errorf("read file %s: %w", path, err)}
 		}
 		return baseResult{value: strings.TrimRight(string(data), "\n"), handled: true}
@@ -444,8 +448,14 @@ type modifier struct {
 
 // parsePlaceholder splits the inner content of a placeholder into the reference
 // spec and its trailing modifiers. Splitting happens on top-level "|" only, so
-// pipes inside nested "{{ ... }}" path templates are left untouched.
+// pipes inside nested "{{ ... }}" path templates or double-quoted modifier
+// arguments are left untouched. A cmd: reference is exempt from splitting
+// entirely, because "|" is a shell pipe operator and the whole content is the
+// command; cmd: therefore takes no modifiers.
 func parsePlaceholder(inner string) (spec string, mods []modifier) {
+	if trimmed := strings.TrimSpace(inner); strings.HasPrefix(trimmed, "cmd:") {
+		return trimmed, nil
+	}
 	parts := splitTopLevelPipe(inner)
 	spec = strings.TrimSpace(parts[0])
 	for _, raw := range parts[1:] {
@@ -459,13 +469,18 @@ func parsePlaceholder(inner string) (spec string, mods []modifier) {
 }
 
 // splitTopLevelPipe splits s on "|" characters that are not inside a nested
-// "{{ ... }}" group.
+// "{{ ... }}" group or a double-quoted string.
 func splitTopLevelPipe(s string) []string {
 	var parts []string
 	depth := 0
+	inQuote := false
 	start := 0
 	for i := 0; i < len(s); i++ {
 		switch {
+		case s[i] == '"':
+			inQuote = !inQuote
+		case inQuote:
+			// Skip everything inside a quoted modifier argument.
 		case strings.HasPrefix(s[i:], "{{"):
 			depth++
 			i++
@@ -514,31 +529,35 @@ func tokenizeArgs(s string) []string {
 }
 
 // applyModifiers runs the modifier chain over the resolved value. default and
-// required are handled specially because they react to a missing/empty value
-// (an error from the lookup is treated as missing); every other modifier is a
-// Sprig/template function applied to a present value and is skipped while an
-// error is pending.
+// required react only to a missing or empty value (a genuine "not found", not a
+// transport/authorization failure) so a real lookup error is never silently
+// replaced by a default; such an error stops the chain and propagates. Every
+// other modifier is a Sprig/template function applied to a present value.
 func (p *processor) applyModifiers(val string, err error, mods []modifier) (string, error) {
 	for _, m := range mods {
 		switch m.name {
 		case "default":
-			if err != nil || val == "" {
+			if isMissingOrEmpty(val, err) {
 				if len(m.args) < 1 {
 					return "", fmt.Errorf("default modifier requires an argument")
 				}
 				val, err = m.args[0], nil
+			} else if err != nil {
+				return "", err
 			}
 		case "required":
-			if err != nil || val == "" {
+			if isMissingOrEmpty(val, err) {
 				msg := "value is required but missing or empty"
 				if len(m.args) >= 1 {
 					msg = m.args[0]
 				}
 				return "", &requiredError{msg: msg}
+			} else if err != nil {
+				return "", err
 			}
 		default:
 			if err != nil {
-				continue
+				return "", err
 			}
 			var terr error
 			val, terr = p.transform(m, val)
@@ -548,6 +567,16 @@ func (p *processor) applyModifiers(val string, err error, mods []modifier) (stri
 		}
 	}
 	return val, err
+}
+
+// isMissingOrEmpty reports whether the resolved value should be treated as
+// absent: either the lookup reported a genuine "not found" or it succeeded with
+// an empty string. A real (transport/authorization) error is not missing.
+func isMissingOrEmpty(val string, err error) bool {
+	if err != nil {
+		return aws.IsNotFound(err)
+	}
+	return val == ""
 }
 
 // transform applies a single modifier by running the value through a Sprig

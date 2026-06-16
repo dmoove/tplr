@@ -14,8 +14,28 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	smtypes "github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/smithy-go"
 )
+
+// NotFoundError marks a value that does not exist (an unset parameter, a missing
+// secret or key, an absent object), as opposed to a transport or authorization
+// failure. Callers can use IsNotFound to act only on genuinely-missing values.
+type NotFoundError struct{ Msg string }
+
+func (e *NotFoundError) Error() string { return e.Msg }
+
+// NotFound builds a NotFoundError.
+func NotFound(format string, a ...any) error {
+	return &NotFoundError{Msg: fmt.Sprintf(format, a...)}
+}
+
+// IsNotFound reports whether err indicates an absent value rather than a
+// transport or authorization failure.
+func IsNotFound(err error) bool {
+	var e *NotFoundError
+	return errors.As(err, &e)
+}
 
 // Client wraps AWS SDK clients.
 type ssmClient interface {
@@ -72,10 +92,14 @@ func (c *Client) SSM(ctx context.Context, name string) (string, error) {
 		WithDecryption: &withDec,
 	})
 	if err != nil {
+		var pnf *ssmtypes.ParameterNotFound
+		if errors.As(err, &pnf) {
+			return "", NotFound("parameter %s not found", name)
+		}
 		return "", c.wrap(err)
 	}
 	if out.Parameter == nil || out.Parameter.Value == nil {
-		return "", fmt.Errorf("parameter %s not found", name)
+		return "", NotFound("parameter %s not found", name)
 	}
 	return *out.Parameter.Value, nil
 }
@@ -87,7 +111,7 @@ func (c *Client) SecretsManager(ctx context.Context, id string, key string) (str
 	if err != nil {
 		var rnf *smtypes.ResourceNotFoundException
 		if errors.As(err, &rnf) {
-			return "", fmt.Errorf("secret %s not found", id)
+			return "", NotFound("secret %s not found", id)
 		}
 		return "", c.wrap(err)
 	}
@@ -103,7 +127,7 @@ func (c *Client) SecretsManager(ctx context.Context, id string, key string) (str
 	}
 	v, ok := obj[key]
 	if !ok {
-		return "", fmt.Errorf("key %s not found in secret %s", key, id)
+		return "", NotFound("key %s not found in secret %s", key, id)
 	}
 	return v, nil
 }
@@ -116,9 +140,9 @@ func (c *Client) S3(ctx context.Context, bucket, key string) (string, error) {
 		var nsb *s3types.NoSuchBucket
 		switch {
 		case errors.As(err, &nsk):
-			return "", fmt.Errorf("object s3://%s/%s not found", bucket, key)
+			return "", NotFound("object s3://%s/%s not found", bucket, key)
 		case errors.As(err, &nsb):
-			return "", fmt.Errorf("bucket %s not found", bucket)
+			return "", NotFound("bucket %s not found", bucket)
 		}
 		return "", c.wrap(err)
 	}

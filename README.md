@@ -21,7 +21,9 @@ An AWS reference may pin a region inline with `aws@REGION:` (e.g.
 regions or partitions at once. Without it, the global region is used.
 
 The `cmd:` source runs an arbitrary shell command (`sh -c`) and is therefore
-disabled unless you pass `--allow-exec`.
+disabled unless you pass `--allow-exec`. Because `|` is the shell pipe operator,
+a `cmd:` placeholder is taken verbatim and does not accept tplr modifiers
+(e.g. `{{cmd:echo hi | tr a-z A-Z}}` runs the whole pipeline).
 
 ### Modifiers
 
@@ -32,7 +34,7 @@ that react to a missing or empty value:
 
 | Modifier | Effect |
 | --- | --- |
-| `default "VALUE"` | Use `VALUE` when the reference is missing or resolves to an empty string |
+| `default "VALUE"` | Use `VALUE` when the reference is genuinely missing (not found / unset) or resolves to an empty string. A real lookup failure (network, credentials) still fails the render rather than falling back |
 | `required` / `required "MESSAGE"` | Fail when the value is missing or empty, even with `--ignore-missing` |
 
 ```yaml
