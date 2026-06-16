@@ -2,11 +2,38 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ main ]
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
-  build:
+  # release-please tracks Conventional Commits on main, maintains a release PR
+  # with the computed version bump and CHANGELOG, and on merge of that PR creates
+  # the git tag and GitHub release.
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      # The dmoove org disallows GitHub Actions from creating pull requests, so
+      # the default GITHUB_TOKEN cannot open the release PR. Provide a PAT (or
+      # GitHub App token) as the RELEASE_PLEASE_TOKEN secret to work around this;
+      # alternatively an org admin can enable "Allow GitHub Actions to create and
+      # approve pull requests", after which GITHUB_TOKEN is sufficient.
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+  # A release created by release-please via GITHUB_TOKEN does not trigger a
+  # separate tag-push workflow, so the binaries are built and attached here in
+  # the same run, gated on a release actually having been created.
+  upload-assets:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -28,31 +55,15 @@ jobs:
           ext=""
           if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o $name$ext ./cmd/tplr
+            go build -ldflags "-X main.version=${{ needs.release-please.outputs.tag_name }}" -o $name$ext ./cmd/tplr
           if [ "${{ matrix.goos }}" = "windows" ]; then
             zip ${name}.zip $name$ext
             echo "artifact=${name}.zip" >> "$GITHUB_OUTPUT"
-            rm $name$ext
           else
             tar -czf ${name}.tar.gz $name$ext
             echo "artifact=${name}.tar.gz" >> "$GITHUB_OUTPUT"
-            rm $name$ext
           fi
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.build.outputs.artifact }}
-          path: ${{ steps.build.outputs.artifact }}
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/**
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ needs.release-please.outputs.tag_name }} ${{ steps.build.outputs.artifact }} --clobber

@@ -88,6 +88,18 @@ go test ./...
 
 ## Release
 
-Tagged commits starting with `v` trigger a GitHub Actions workflow that builds
-cross-platform binaries and attaches them to a GitHub release.
+Releases are automated with
+[release-please](https://github.com/googleapis/release-please). Every push to
+`main` is analysed for [Conventional Commits](https://www.conventionalcommits.org)
+(`feat:`, `fix:`, `feat!:`/`BREAKING CHANGE:` for major), and release-please
+maintains a release pull request with the computed version bump and a generated
+`CHANGELOG.md`.
+
+Merging that release PR creates the git tag and GitHub release, and the same
+workflow builds the cross-platform binaries and attaches them to the release.
+The binary version (`tplr --version`) is taken from the tag.
+
+Because release-please derives the version from commit messages, merges to
+`main` should use Conventional Commit messages (e.g. squash-merge with a
+`feat: ...` or `fix: ...` PR title).
 
