@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/template"
 
-	"tplr/internal/aws"
+	"github.com/dmoove/tplr/internal/aws"
 )
 
 // Default placeholder delimiters.

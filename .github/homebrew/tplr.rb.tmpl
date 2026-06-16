@@ -1,0 +1,36 @@
+class Tplr < Formula
+  desc "Replace secret placeholders in configuration files"
+  homepage "https://github.com/dmoove/tplr"
+  version "${VERSION}"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "${BASE}/tplr-darwin-arm64.tar.gz"
+      sha256 "${SHA_DARWIN_ARM64}"
+    end
+    on_intel do
+      url "${BASE}/tplr-darwin-amd64.tar.gz"
+      sha256 "${SHA_DARWIN_AMD64}"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "${BASE}/tplr-linux-arm64.tar.gz"
+      sha256 "${SHA_LINUX_ARM64}"
+    end
+    on_intel do
+      url "${BASE}/tplr-linux-amd64.tar.gz"
+      sha256 "${SHA_LINUX_AMD64}"
+    end
+  end
+
+  def install
+    bin.install Dir["tplr-*"].first => "tplr"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/tplr --version")
+  end
+end
