@@ -42,6 +42,7 @@ The processed file is printed to stdout if `--dest` is not provided.
 | `--out-dir` | Output directory when `--source` matches multiple files; the template extension (`.tmpl`/`.tpl`/`.template`) is stripped |
 | `--in-place` | Overwrite each source file with its rendered output |
 | `--env` | Environment name (defaults to `$ENV`) |
+| `--region` | AWS region for SSM/Secrets Manager (defaults to `$AWS_REGION`); required to target a non-standard partition such as the European Sovereign Cloud |
 | `--left`, `--right` | Placeholder delimiters (default `{{` and `}}`); custom delimiters must not contain `{` or `}` |
 | `--ignore-missing` | Leave placeholders untouched instead of failing when they cannot be resolved |
 | `--dry-run` | Resolve placeholders (to verify they exist) but mask the values and write nothing |
@@ -54,6 +55,22 @@ to the same parameter/secret are looked up only once per run.
 Supported sources are AWS SSM Parameter Store, AWS Secrets Manager, environment
 variables and files. Templates that use only `env`/`file` sources do not require
 AWS credentials.
+
+### AWS regions and the European Sovereign Cloud
+
+AWS lookups use the region from `--region`, `$AWS_REGION` or the active profile.
+The AWS European Sovereign Cloud (ESC) is a separate partition with its own
+endpoints (`*.amazonaws.eu`) and credentials, so its region must be selected
+explicitly:
+
+```bash
+tplr --source config.yml.tmpl --dest config.yml --region eusc-de-east-1
+# or: AWS_REGION=eusc-de-east-1 tplr --source config.yml.tmpl --dest config.yml
+```
+
+Make sure the configured credentials belong to the same partition; commercial
+credentials are rejected by ESC (and vice versa) with
+`UnrecognizedClientException`.
 
 ## Build
 

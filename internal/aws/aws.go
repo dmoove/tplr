@@ -26,9 +26,17 @@ type Client struct {
 	secret secretsManagerClient
 }
 
-// New initializes AWS SDK clients using default config.
-func New() (*Client, error) {
-	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
+// New initializes AWS SDK clients using the default config chain. If region is
+// non-empty it overrides the region resolved from the environment/profile, which
+// is required to target a non-standard partition such as the AWS European
+// Sovereign Cloud (e.g. "eusc-de-east-1"). The SDK resolves the matching
+// partition endpoints and signing automatically from the region.
+func New(ctx context.Context, region string) (*Client, error) {
+	loadOpts := []func(*awsconfig.LoadOptions) error{}
+	if region != "" {
+		loadOpts = append(loadOpts, awsconfig.WithRegion(region))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, err
 	}

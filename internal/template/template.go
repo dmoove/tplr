@@ -33,6 +33,11 @@ type AWSClient interface {
 type Options struct {
 	// Env is exposed to path templates via the env function.
 	Env string
+	// Region overrides the AWS region used for SSM/Secrets Manager lookups.
+	// Empty falls back to the SDK's default resolution (AWS_REGION, profile).
+	// Set this to target a non-standard partition such as the AWS European
+	// Sovereign Cloud (e.g. "eusc-de-east-1").
+	Region string
 	// Left and Right are the placeholder delimiters. Empty values fall back to
 	// the defaults ("{{" and "}}"). Custom delimiters must not contain "{" or
 	// "}" because path templating always uses Go's {{ }} syntax.
@@ -67,7 +72,7 @@ func Process(ctx context.Context, input string, opts Options) (string, error) {
 	var client AWSClient
 	provider := func() (AWSClient, error) {
 		if client == nil {
-			c, err := aws.New()
+			c, err := aws.New(ctx, opts.Region)
 			if err != nil {
 				return nil, err
 			}
