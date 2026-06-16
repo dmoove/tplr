@@ -174,6 +174,67 @@ func TestCustomDelimiters(t *testing.T) {
 	}
 }
 
+func TestParseAWSRef(t *testing.T) {
+	cases := []struct {
+		in           string
+		region, rest string
+		ok           bool
+	}{
+		{"aws:ssm:/path", "", "ssm:/path", true},
+		{"aws@eusc-de-east-1:ssm:/path", "eusc-de-east-1", "ssm:/path", true},
+		{"aws@eu-central-1:secretsmanager:id#key", "eu-central-1", "secretsmanager:id#key", true},
+		{"aws@:ssm:/path", "", "", false}, // empty region
+		{"env:VAR", "", "", false},
+		{"file:/x", "", "", false},
+	}
+	for _, c := range cases {
+		region, rest, ok := parseAWSRef(c.in)
+		if ok != c.ok || region != c.region || rest != c.rest {
+			t.Errorf("parseAWSRef(%q) = (%q,%q,%v), want (%q,%q,%v)", c.in, region, rest, ok, c.region, c.rest, c.ok)
+		}
+	}
+}
+
+func TestInlineRegionSelectsClient(t *testing.T) {
+	// Track which region each client was created for.
+	used := map[string]*stubAWS{}
+	provider := func(region string) (AWSClient, error) {
+		if c, ok := used[region]; ok {
+			return c, nil
+		}
+		c := &stubAWS{ssm: map[string]string{"/p": "val-" + region}}
+		used[region] = c
+		return c, nil
+	}
+	opts := Options{Region: "default-region"}
+	input := "a={{aws:ssm:/p}},b={{aws@eusc-de-east-1:ssm:/p}}"
+	got, err := process(context.Background(), input, opts, provider)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "a=val-default-region,b=val-eusc-de-east-1"; got != want {
+		t.Fatalf("want %s got %s", want, got)
+	}
+	if _, ok := used["default-region"]; !ok {
+		t.Error("expected a client for the default region")
+	}
+	if _, ok := used["eusc-de-east-1"]; !ok {
+		t.Error("expected a client for the inline region")
+	}
+}
+
+func TestInlineRegionSecretsManager(t *testing.T) {
+	client := &stubAWS{secret: map[string]string{"app/db": `{"Password":"p"}`}}
+	got, err := ProcessWithClient(context.Background(),
+		"{{aws@eusc-de-east-1:secretsmanager:app/db#Password}}", Options{}, client)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "p"; got != want {
+		t.Fatalf("want %s got %s", want, got)
+	}
+}
+
 func TestCachingDedupesLookups(t *testing.T) {
 	client := &stubAWS{ssm: map[string]string{"/path": "val"}}
 	input := "{{aws:ssm:/path}}{{aws:ssm:/path}}{{aws:ssm:/path}}"
