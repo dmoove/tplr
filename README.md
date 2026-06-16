@@ -103,3 +103,6 @@ Because release-please derives the version from commit messages, merges to
 `main` should use Conventional Commit messages (e.g. squash-merge with a
 `feat: ...` or `fix: ...` PR title).
 
+Released versions and their changelog are available on the
+[releases page](https://github.com/dmoove/tplr/releases).
+
