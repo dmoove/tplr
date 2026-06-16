@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -196,9 +197,13 @@ func TestParseAWSRef(t *testing.T) {
 }
 
 func TestInlineRegionSelectsClient(t *testing.T) {
-	// Track which region each client was created for.
+	// Track which region each client was created for. The provider is called
+	// concurrently, so guard the map.
+	var mu sync.Mutex
 	used := map[string]*stubAWS{}
 	provider := func(region string) (AWSClient, error) {
+		mu.Lock()
+		defer mu.Unlock()
 		if c, ok := used[region]; ok {
 			return c, nil
 		}
@@ -247,5 +252,91 @@ func TestCachingDedupesLookups(t *testing.T) {
 	}
 	if client.ssmCalls != 1 {
 		t.Fatalf("expected 1 SSM call, got %d", client.ssmCalls)
+	}
+}
+
+func TestDefaultModifier(t *testing.T) {
+	got, err := ProcessWithClient(context.Background(),
+		"{{env:DEFINITELY_NOT_SET_VAR | default \"fallback\"}}", Options{}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "fallback"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestRequiredModifierFails(t *testing.T) {
+	// required overrides IgnoreMissing.
+	_, err := ProcessWithClient(context.Background(),
+		"{{env:DEFINITELY_NOT_SET_VAR | required}}", Options{IgnoreMissing: true}, &stubAWS{})
+	if err == nil {
+		t.Fatal("expected required modifier to fail on a missing value")
+	}
+}
+
+func TestSprigModifier(t *testing.T) {
+	t.Setenv("MY_VAR", "hello")
+	got, err := ProcessWithClient(context.Background(),
+		"{{env:MY_VAR | upper}}", Options{}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "HELLO"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestReplaceModifier(t *testing.T) {
+	t.Setenv("MY_VAR", "a-b-c")
+	got, err := ProcessWithClient(context.Background(),
+		"{{env:MY_VAR | replace \"-\" \"_\"}}", Options{}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "a_b_c"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestMaskOnlyMasksSecrets(t *testing.T) {
+	t.Setenv("USER_NAME", "alice")
+	client := &stubAWS{ssm: map[string]string{"/pw": "supersecret"}}
+	got, err := ProcessWithClient(context.Background(),
+		"user={{env:USER_NAME}},pw={{aws:ssm:/pw}}", Options{Mask: true}, client)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "user=alice,pw=***"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestCmdDisabledByDefault(t *testing.T) {
+	_, err := ProcessWithClient(context.Background(), "{{cmd:echo hi}}", Options{}, &stubAWS{})
+	if err == nil {
+		t.Fatal("expected cmd source to be disabled without AllowExec")
+	}
+}
+
+func TestCmdAllowExec(t *testing.T) {
+	got, err := ProcessWithClient(context.Background(), "{{cmd:echo hi}}", Options{AllowExec: true}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "hi"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestModifierWithNestedPathTemplate(t *testing.T) {
+	client := &stubAWS{ssm: map[string]string{"app/dev/db": "secret"}}
+	got, err := ProcessWithClient(context.Background(),
+		"{{aws:ssm:app/{{env | toLower}}/db | upper}}", Options{Env: "DEV"}, client)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "SECRET"; got != want {
+		t.Fatalf("want %q got %q", want, got)
 	}
 }

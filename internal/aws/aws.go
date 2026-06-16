@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	smtypes "github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/smithy-go"
 )
 
 // Client wraps AWS SDK clients.
@@ -21,28 +26,41 @@ type secretsManagerClient interface {
 	GetSecretValue(ctx context.Context, params *secretsmanager.GetSecretValueInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
 }
 
+type s3Client interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
 type Client struct {
+	region string
 	ssm    ssmClient
 	secret secretsManagerClient
+	s3     s3Client
 }
 
 // New initializes AWS SDK clients using the default config chain. If region is
 // non-empty it overrides the region resolved from the environment/profile, which
 // is required to target a non-standard partition such as the AWS European
 // Sovereign Cloud (e.g. "eusc-de-east-1"). The SDK resolves the matching
-// partition endpoints and signing automatically from the region.
-func New(ctx context.Context, region string) (*Client, error) {
+// partition endpoints and signing automatically from the region. maxAttempts
+// caps the number of SDK request attempts (retries + 1); values <= 0 keep the
+// SDK default.
+func New(ctx context.Context, region string, maxAttempts int) (*Client, error) {
 	loadOpts := []func(*awsconfig.LoadOptions) error{}
 	if region != "" {
 		loadOpts = append(loadOpts, awsconfig.WithRegion(region))
+	}
+	if maxAttempts > 0 {
+		loadOpts = append(loadOpts, awsconfig.WithRetryMaxAttempts(maxAttempts))
 	}
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return &Client{
+		region: cfg.Region,
 		ssm:    ssm.NewFromConfig(cfg),
 		secret: secretsmanager.NewFromConfig(cfg),
+		s3:     s3.NewFromConfig(cfg),
 	}, nil
 }
 
@@ -54,7 +72,7 @@ func (c *Client) SSM(ctx context.Context, name string) (string, error) {
 		WithDecryption: &withDec,
 	})
 	if err != nil {
-		return "", err
+		return "", c.wrap(err)
 	}
 	if out.Parameter == nil || out.Parameter.Value == nil {
 		return "", fmt.Errorf("parameter %s not found", name)
@@ -71,7 +89,7 @@ func (c *Client) SecretsManager(ctx context.Context, id string, key string) (str
 		if errors.As(err, &rnf) {
 			return "", fmt.Errorf("secret %s not found", id)
 		}
-		return "", err
+		return "", c.wrap(err)
 	}
 	if out.SecretString == nil {
 		return "", fmt.Errorf("secret %s has no string value", id)
@@ -88,4 +106,44 @@ func (c *Client) SecretsManager(ctx context.Context, id string, key string) (str
 		return "", fmt.Errorf("key %s not found in secret %s", key, id)
 	}
 	return v, nil
+}
+
+// S3 fetches the contents of an object identified by bucket and key.
+func (c *Client) S3(ctx context.Context, bucket, key string) (string, error) {
+	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{Bucket: &bucket, Key: &key})
+	if err != nil {
+		var nsk *s3types.NoSuchKey
+		var nsb *s3types.NoSuchBucket
+		switch {
+		case errors.As(err, &nsk):
+			return "", fmt.Errorf("object s3://%s/%s not found", bucket, key)
+		case errors.As(err, &nsb):
+			return "", fmt.Errorf("bucket %s not found", bucket)
+		}
+		return "", c.wrap(err)
+	}
+	defer out.Body.Close()
+	data, err := io.ReadAll(out.Body)
+	if err != nil {
+		return "", fmt.Errorf("read s3://%s/%s: %w", bucket, key, err)
+	}
+	return string(data), nil
+}
+
+// wrap adds a region/partition hint to credential-mismatch errors, which are the
+// most common failure when the configured credentials belong to a different AWS
+// partition than the targeted region (e.g. commercial credentials against the
+// European Sovereign Cloud, or vice versa).
+func (c *Client) wrap(err error) error {
+	if err == nil {
+		return nil
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.ErrorCode()
+		if strings.Contains(code, "UnrecognizedClient") || strings.Contains(code, "InvalidClientTokenId") || code == "AccessDeniedException" {
+			return fmt.Errorf("%w (region %q: check that the credentials belong to the same AWS partition as the region)", err, c.region)
+		}
+	}
+	return err
 }
