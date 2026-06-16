@@ -9,8 +9,15 @@ A command line tool that replaces secret placeholders in configuration files.
 | `{{aws:ssm:PARAM}}` | AWS SSM Parameter Store (decrypted) |
 | `{{aws:secretsmanager:SECRET}}` | AWS Secrets Manager (raw string) |
 | `{{aws:secretsmanager:SECRET#KEY}}` | AWS Secrets Manager (JSON, key extracted) |
+| `{{aws@REGION:ssm:PARAM}}` | As above, but pinned to a specific AWS region |
+| `{{aws@REGION:secretsmanager:SECRET#KEY}}` | As above, but pinned to a specific AWS region |
 | `{{env:VAR}}` | Environment variable |
 | `{{file:/path}}` | File contents (trailing newline trimmed) |
+
+An AWS reference may pin a region inline with `aws@REGION:` (e.g.
+`{{aws@eusc-de-east-1:ssm:/app/db}}`). The inline region overrides `--region` /
+`$AWS_REGION` for that placeholder, so a single file can pull from several
+regions or partitions at once. Without it, the global region is used.
 
 The path portion of any placeholder can be templated using the function `env`
 and the function `toLower`.
@@ -66,6 +73,7 @@ explicitly:
 ```bash
 tplr --source config.yml.tmpl --dest config.yml --region eusc-de-east-1
 # or: AWS_REGION=eusc-de-east-1 tplr --source config.yml.tmpl --dest config.yml
+# or pin it per placeholder: {{aws@eusc-de-east-1:secretsmanager:app/db#Password}}
 ```
 
 Make sure the configured credentials belong to the same partition; commercial

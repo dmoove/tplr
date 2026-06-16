@@ -65,38 +65,40 @@ func (o Options) right() string {
 	return o.Right
 }
 
-// Process resolves placeholders using a real AWS client created via aws.New().
-// The AWS client is created lazily, so templates that reference only env and
-// file sources work without AWS credentials being configured.
+// Process resolves placeholders using real AWS clients created via aws.New().
+// Clients are created lazily and cached per region, so templates that reference
+// only env and file sources work without AWS credentials being configured, and
+// a per-placeholder region (aws@region:...) gets its own client.
 func Process(ctx context.Context, input string, opts Options) (string, error) {
-	var client AWSClient
-	provider := func() (AWSClient, error) {
-		if client == nil {
-			c, err := aws.New(ctx, opts.Region)
-			if err != nil {
-				return nil, err
-			}
-			client = c
+	clients := map[string]AWSClient{}
+	provider := func(region string) (AWSClient, error) {
+		if c, ok := clients[region]; ok {
+			return c, nil
 		}
-		return client, nil
+		c, err := aws.New(ctx, region)
+		if err != nil {
+			return nil, err
+		}
+		clients[region] = c
+		return c, nil
 	}
 	return process(ctx, input, opts, provider)
 }
 
-// ProcessWithClient is like Process but uses the provided AWS client. This is
-// primarily intended for tests.
+// ProcessWithClient is like Process but uses the provided AWS client for every
+// region. This is primarily intended for tests.
 func ProcessWithClient(ctx context.Context, input string, opts Options, awsClient AWSClient) (string, error) {
-	return process(ctx, input, opts, func() (AWSClient, error) { return awsClient, nil })
+	return process(ctx, input, opts, func(string) (AWSClient, error) { return awsClient, nil })
 }
 
 type processor struct {
 	ctx         context.Context
 	opts        Options
-	awsProvider func() (AWSClient, error)
+	awsProvider func(region string) (AWSClient, error)
 	cache       map[string]string
 }
 
-func process(ctx context.Context, input string, opts Options, awsProvider func() (AWSClient, error)) (string, error) {
+func process(ctx context.Context, input string, opts Options, awsProvider func(region string) (AWSClient, error)) (string, error) {
 	p := &processor{
 		ctx:         ctx,
 		opts:        opts,
@@ -144,37 +146,10 @@ func process(ctx context.Context, input string, opts Options, awsProvider func()
 // handled is false when the placeholder is not a supported reference, in which
 // case the caller keeps the original text.
 func (p *processor) resolve(inner string) (value string, handled bool, err error) {
+	if region, rest, ok := parseAWSRef(inner); ok {
+		return p.resolveAWS(region, rest)
+	}
 	switch {
-	case strings.HasPrefix(inner, "aws:ssm:"):
-		path, err := p.execTmpl(strings.TrimPrefix(inner, "aws:ssm:"))
-		if err != nil {
-			return "", true, err
-		}
-		return p.cached("ssm:"+path, func() (string, error) {
-			c, err := p.awsProvider()
-			if err != nil {
-				return "", fmt.Errorf("init aws: %w", err)
-			}
-			return c.SSM(p.ctx, path)
-		})
-	case strings.HasPrefix(inner, "aws:secretsmanager:"):
-		arg := strings.TrimPrefix(inner, "aws:secretsmanager:")
-		var key string
-		if idx := strings.Index(arg, "#"); idx >= 0 {
-			key = arg[idx+1:]
-			arg = arg[:idx]
-		}
-		path, err := p.execTmpl(arg)
-		if err != nil {
-			return "", true, err
-		}
-		return p.cached("sm:"+path+"#"+key, func() (string, error) {
-			c, err := p.awsProvider()
-			if err != nil {
-				return "", fmt.Errorf("init aws: %w", err)
-			}
-			return c.SecretsManager(p.ctx, path, key)
-		})
 	case strings.HasPrefix(inner, "env:"):
 		name, err := p.execTmpl(strings.TrimPrefix(inner, "env:"))
 		if err != nil {
@@ -196,6 +171,68 @@ func (p *processor) resolve(inner string) (value string, handled bool, err error
 				return "", fmt.Errorf("read file %s: %w", path, err)
 			}
 			return strings.TrimRight(string(data), "\n"), nil
+		})
+	default:
+		return "", false, nil
+	}
+}
+
+// parseAWSRef recognizes the AWS provider prefix with an optional inline region,
+// i.e. "aws:<rest>" or "aws@<region>:<rest>". rest is the part after the
+// provider (e.g. "ssm:/path" or "secretsmanager:id#key"). ok is false for any
+// non-AWS reference.
+func parseAWSRef(inner string) (region, rest string, ok bool) {
+	if strings.HasPrefix(inner, "aws@") {
+		after := inner[len("aws@"):]
+		idx := strings.Index(after, ":")
+		if idx <= 0 {
+			return "", "", false
+		}
+		return after[:idx], after[idx+1:], true
+	}
+	if strings.HasPrefix(inner, "aws:") {
+		return "", strings.TrimPrefix(inner, "aws:"), true
+	}
+	return "", "", false
+}
+
+// resolveAWS resolves an SSM or Secrets Manager reference. region is the inline
+// region from the placeholder; when empty it falls back to Options.Region. An
+// unsupported service is reported as not handled so the placeholder is kept.
+func (p *processor) resolveAWS(region, rest string) (string, bool, error) {
+	if region == "" {
+		region = p.opts.Region
+	}
+	switch {
+	case strings.HasPrefix(rest, "ssm:"):
+		path, err := p.execTmpl(strings.TrimPrefix(rest, "ssm:"))
+		if err != nil {
+			return "", true, err
+		}
+		return p.cached("ssm:"+region+":"+path, func() (string, error) {
+			c, err := p.awsProvider(region)
+			if err != nil {
+				return "", fmt.Errorf("init aws: %w", err)
+			}
+			return c.SSM(p.ctx, path)
+		})
+	case strings.HasPrefix(rest, "secretsmanager:"):
+		arg := strings.TrimPrefix(rest, "secretsmanager:")
+		var key string
+		if idx := strings.Index(arg, "#"); idx >= 0 {
+			key = arg[idx+1:]
+			arg = arg[:idx]
+		}
+		path, err := p.execTmpl(arg)
+		if err != nil {
+			return "", true, err
+		}
+		return p.cached("sm:"+region+":"+path+"#"+key, func() (string, error) {
+			c, err := p.awsProvider(region)
+			if err != nil {
+				return "", fmt.Errorf("init aws: %w", err)
+			}
+			return c.SecretsManager(p.ctx, path, key)
 		})
 	default:
 		return "", false, nil
