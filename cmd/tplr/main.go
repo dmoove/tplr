@@ -22,6 +22,7 @@ func main() {
 		outDir        string
 		inPlace       bool
 		env           string
+		region        string
 		left          string
 		right         string
 		ignoreMissing bool
@@ -35,6 +36,7 @@ func main() {
 	flag.StringVar(&outDir, "out-dir", "", "output directory when rendering multiple files (template extension is stripped)")
 	flag.BoolVar(&inPlace, "in-place", false, "overwrite each source file with its rendered output")
 	flag.StringVar(&env, "env", os.Getenv("ENV"), "environment name")
+	flag.StringVar(&region, "region", os.Getenv("AWS_REGION"), "AWS region for SSM/Secrets Manager (e.g. eusc-de-east-1 for the European Sovereign Cloud); defaults to $AWS_REGION")
 	flag.StringVar(&left, "left", "{{", "left placeholder delimiter")
 	flag.StringVar(&right, "right", "}}", "right placeholder delimiter")
 	flag.BoolVar(&ignoreMissing, "ignore-missing", false, "leave placeholders untouched instead of failing when they cannot be resolved")
@@ -65,6 +67,7 @@ func main() {
 
 	opts := template.Options{
 		Env:           env,
+		Region:        region,
 		Left:          left,
 		Right:         right,
 		IgnoreMissing: ignoreMissing,
