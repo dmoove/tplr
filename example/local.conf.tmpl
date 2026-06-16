@@ -1,0 +1,8 @@
+# Renders without any AWS credentials — only env, file and cmd sources.
+#
+#   API_USER=alice tplr --source example/local.conf.tmpl --allow-exec
+#
+app_name   = {{env:APP_NAME | default "myapp" | upper}}
+api_user   = {{env:API_USER | required "set API_USER before rendering"}}
+home_dir   = {{env:HOME}}
+git_commit = {{cmd:git rev-parse --short HEAD}}
