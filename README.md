@@ -93,14 +93,22 @@ GOOS=windows GOARCH=amd64 go build -o tplr.exe ./cmd/tplr
 
 ## Container
 
-Build a Docker image that can be used as an init container:
+Multi-arch images (`linux/amd64`, `linux/arm64`) are published on every release
+to GitHub Container Registry and Docker Hub:
+
+```bash
+docker pull ghcr.io/dmoove/tplr:latest      # or a pinned version, e.g. :0.3.0
+docker pull dmoove/tplr:latest
+```
+
+Or build it yourself:
 
 ```bash
 docker build -t tplr:latest .
 ```
 
-You can then run it in Kubernetes to populate a volume with the rendered
-configuration file.
+The image can be used as an init container to populate a volume with the
+rendered configuration file, for example in Kubernetes.
 
 ## Tests
 
