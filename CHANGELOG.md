@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/dmoove/tplr/compare/v0.4.0...v0.5.0) (2026-06-16)
+
+
+### Features
+
+* go install, Homebrew tap and SBOM distribution ([#13](https://github.com/dmoove/tplr/issues/13)) ([f8b499a](https://github.com/dmoove/tplr/commit/f8b499a1b2a987898042775ee43110b709baee03))
+
 ## [0.4.0](https://github.com/dmoove/tplr/compare/v0.3.0...v0.4.0) (2026-06-16)
 
 
