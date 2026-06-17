@@ -1,0 +1,28 @@
+# A typical service configuration rendered by tplr.
+#
+#   tplr --source example/config.yml.tmpl --dest config.yml \
+#        --env dev --region eu-central-1 --allow-exec
+#
+# Secrets come from SSM / Secrets Manager; everything else from the environment,
+# local files or commands. The {{env | toLower}} inside a path is templated with
+# the current --env value.
+
+database:
+  # Plain SSM parameter (decrypted on read).
+  host: {{aws:ssm:/app/{{env | toLower}}/db/host}}
+  # One key extracted from a JSON secret in Secrets Manager.
+  password: {{aws:secretsmanager:app/{{env | toLower}}/db#password}}
+
+api:
+  # Environment variable with a fallback when it is not set.
+  user: {{env:API_USER | default "service"}}
+  # Required: rendering fails if API_TOKEN is missing or empty.
+  token: {{env:API_TOKEN | required "set API_TOKEN before rendering"}}
+
+tls:
+  # File contents, base64-encoded onto a single line via a Sprig modifier.
+  certBase64: {{file:/etc/tls/cert.pem | b64enc}}
+
+build:
+  # Standard output of a shell command (needs --allow-exec).
+  commit: {{cmd:git rev-parse --short HEAD}}

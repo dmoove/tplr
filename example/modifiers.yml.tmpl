@@ -1,0 +1,18 @@
+# Value modifiers: pipe a resolved value through the Sprig function library and
+# the tplr-specific default/required helpers with "{{ ref | mod | mod }}".
+#
+#   APP_NAME=My-App RAW="  spaced  " tplr --source example/modifiers.yml.tmpl
+#
+name:      {{env:APP_NAME | lower}}                     # my-app
+nameUpper: {{env:APP_NAME | upper}}                     # MY-APP
+slug:      {{env:APP_NAME | lower | replace "-" "_"}}   # my_app
+trimmed:   {{env:RAW | trim | quote}}                   # "spaced"
+encoded:   {{env:APP_NAME | b64enc}}                    # base64 of the value
+
+# default applies only when the value is genuinely missing/empty; a real lookup
+# error (network, credentials) still fails the render instead of falling back.
+region:    {{env:AWS_REGION | default "eu-central-1"}}
+
+# required fails the render if the value is missing or empty, even when
+# --ignore-missing is set.
+tenant:    {{env:TENANT | required "TENANT must be set"}}

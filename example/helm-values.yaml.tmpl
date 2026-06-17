@@ -1,0 +1,11 @@
+# Custom delimiters: when a file already uses {{ }} (e.g. a Helm values file),
+# switch tplr's delimiters with --left/--right so tplr only touches [[ ]] and
+# leaves {{ }} for the other tool. Nested path templating still uses {{ }}.
+#
+#   tplr --source example/helm-values.yaml.tmpl --left '[[' --right ']]' --env dev
+#
+replicaCount: {{ .Values.replicaCount }}   # Helm — left untouched by tplr
+
+db:
+  password: [[aws:secretsmanager:app/{{env | toLower}}/db#password]]
+  apiKey:   [[env:API_KEY | default "dev-key"]]

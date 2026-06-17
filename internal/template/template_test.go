@@ -3,24 +3,32 @@ package template
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+
+	"github.com/dmoove/tplr/internal/aws"
 )
 
 type stubAWS struct {
 	ssm      map[string]string
 	secret   map[string]string
+	ssmErr   error // when set, SSM returns this (a non-NotFound failure)
 	ssmCalls int
 	secCalls int
 }
 
 func (s *stubAWS) SSM(ctx context.Context, name string) (string, error) {
 	s.ssmCalls++
+	if s.ssmErr != nil {
+		return "", s.ssmErr
+	}
 	v, ok := s.ssm[name]
 	if !ok {
-		return "", fmt.Errorf("not found")
+		return "", aws.NotFound("parameter %s not found", name)
 	}
 	return v, nil
 }
@@ -29,7 +37,7 @@ func (s *stubAWS) SecretsManager(ctx context.Context, id, key string) (string, e
 	s.secCalls++
 	v, ok := s.secret[id]
 	if !ok {
-		return "", fmt.Errorf("not found")
+		return "", aws.NotFound("secret %s not found", id)
 	}
 	if key == "" {
 		return v, nil
@@ -40,7 +48,7 @@ func (s *stubAWS) SecretsManager(ctx context.Context, id, key string) (string, e
 	}
 	val, ok := obj[key]
 	if !ok {
-		return "", fmt.Errorf("key not found")
+		return "", aws.NotFound("key %s not found in secret %s", key, id)
 	}
 	return val, nil
 }
@@ -196,9 +204,13 @@ func TestParseAWSRef(t *testing.T) {
 }
 
 func TestInlineRegionSelectsClient(t *testing.T) {
-	// Track which region each client was created for.
+	// Track which region each client was created for. The provider is called
+	// concurrently, so guard the map.
+	var mu sync.Mutex
 	used := map[string]*stubAWS{}
 	provider := func(region string) (AWSClient, error) {
+		mu.Lock()
+		defer mu.Unlock()
 		if c, ok := used[region]; ok {
 			return c, nil
 		}
@@ -247,5 +259,140 @@ func TestCachingDedupesLookups(t *testing.T) {
 	}
 	if client.ssmCalls != 1 {
 		t.Fatalf("expected 1 SSM call, got %d", client.ssmCalls)
+	}
+}
+
+func TestDefaultModifier(t *testing.T) {
+	got, err := ProcessWithClient(context.Background(),
+		"{{env:DEFINITELY_NOT_SET_VAR | default \"fallback\"}}", Options{}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "fallback"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestRequiredModifierFails(t *testing.T) {
+	// required overrides IgnoreMissing.
+	_, err := ProcessWithClient(context.Background(),
+		"{{env:DEFINITELY_NOT_SET_VAR | required}}", Options{IgnoreMissing: true}, &stubAWS{})
+	if err == nil {
+		t.Fatal("expected required modifier to fail on a missing value")
+	}
+}
+
+func TestSprigModifier(t *testing.T) {
+	t.Setenv("MY_VAR", "hello")
+	got, err := ProcessWithClient(context.Background(),
+		"{{env:MY_VAR | upper}}", Options{}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "HELLO"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestReplaceModifier(t *testing.T) {
+	t.Setenv("MY_VAR", "a-b-c")
+	got, err := ProcessWithClient(context.Background(),
+		"{{env:MY_VAR | replace \"-\" \"_\"}}", Options{}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "a_b_c"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestMaskOnlyMasksSecrets(t *testing.T) {
+	t.Setenv("USER_NAME", "alice")
+	client := &stubAWS{ssm: map[string]string{"/pw": "supersecret"}}
+	got, err := ProcessWithClient(context.Background(),
+		"user={{env:USER_NAME}},pw={{aws:ssm:/pw}}", Options{Mask: true}, client)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "user=alice,pw=***"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestCmdDisabledByDefault(t *testing.T) {
+	_, err := ProcessWithClient(context.Background(), "{{cmd:echo hi}}", Options{}, &stubAWS{})
+	if err == nil {
+		t.Fatal("expected cmd source to be disabled without AllowExec")
+	}
+}
+
+func TestCmdAllowExec(t *testing.T) {
+	got, err := ProcessWithClient(context.Background(), "{{cmd:echo hi}}", Options{AllowExec: true}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "hi"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestModifierWithNestedPathTemplate(t *testing.T) {
+	client := &stubAWS{ssm: map[string]string{"app/dev/db": "secret"}}
+	got, err := ProcessWithClient(context.Background(),
+		"{{aws:ssm:app/{{env | toLower}}/db | upper}}", Options{Env: "DEV"}, client)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "SECRET"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestDefaultDoesNotSwallowRealError(t *testing.T) {
+	// A transport/authorization failure (not a NotFound) must propagate even
+	// when a default is present, so a broken lookup never yields a fallback.
+	client := &stubAWS{ssmErr: errors.New("ExpiredTokenException")}
+	_, err := ProcessWithClient(context.Background(),
+		`{{aws:ssm:/x | default "fallback"}}`, Options{}, client)
+	if err == nil {
+		t.Fatal("expected real lookup error to propagate past default")
+	}
+	if got := err.Error(); !strings.Contains(got, "ExpiredToken") {
+		t.Fatalf("expected underlying error, got %q", got)
+	}
+}
+
+func TestDefaultAppliesOnNotFound(t *testing.T) {
+	client := &stubAWS{ssm: map[string]string{}} // missing -> NotFound
+	got, err := ProcessWithClient(context.Background(),
+		`{{aws:ssm:/missing | default "fallback"}}`, Options{}, client)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "fallback"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestCmdShellPipeline(t *testing.T) {
+	got, err := ProcessWithClient(context.Background(),
+		"{{cmd:echo hi | tr a-z A-Z}}", Options{AllowExec: true}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "HI"; got != want {
+		t.Fatalf("want %q got %q (cmd pipeline must not be parsed as a modifier)", want, got)
+	}
+}
+
+func TestModifierArgWithPipe(t *testing.T) {
+	t.Setenv("MY_VAR", "a|b")
+	got, err := ProcessWithClient(context.Background(),
+		`{{env:MY_VAR | replace "|" "/"}}`, Options{}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "a/b"; got != want {
+		t.Fatalf("want %q got %q", want, got)
 	}
 }
