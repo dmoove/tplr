@@ -6,3 +6,5 @@ app_name   = {{env:APP_NAME | default "myapp" | upper}}
 api_user   = {{env:API_USER | required "set API_USER before rendering"}}
 home_dir   = {{env:HOME}}
 git_commit = {{cmd:git rev-parse --short HEAD}}
+# cmd: content is taken verbatim, so a shell pipeline works as written:
+user_upper = {{cmd:whoami | tr a-z A-Z}}
