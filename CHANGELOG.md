@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/dmoove/tplr/compare/v0.5.0...v0.6.0) (2026-06-17)
+
+
+### Features
+
+* Sprig modifiers, new sources and S3 templates ([#15](https://github.com/dmoove/tplr/issues/15)) ([6517e31](https://github.com/dmoove/tplr/commit/6517e31636d19841997480c9df141e86ed170c83))
+
 ## [0.5.0](https://github.com/dmoove/tplr/compare/v0.4.0...v0.5.0) (2026-06-16)
 
 
