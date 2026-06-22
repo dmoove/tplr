@@ -396,3 +396,84 @@ func TestModifierArgWithPipe(t *testing.T) {
 		t.Fatalf("want %q got %q", want, got)
 	}
 }
+
+// stubSops replaces the package-level sopsDecrypt with a recording fake for the
+// duration of a test, so the template layer can be exercised without real key
+// material.
+func stubSops(t *testing.T, fn func(path, key string) (string, error)) {
+	t.Helper()
+	orig := sopsDecrypt
+	sopsDecrypt = fn
+	t.Cleanup(func() { sopsDecrypt = orig })
+}
+
+func TestSopsSource(t *testing.T) {
+	stubSops(t, func(path, key string) (string, error) {
+		if path != "secrets.yaml" || key != "db.password" {
+			t.Fatalf("unexpected call path=%q key=%q", path, key)
+		}
+		return "s3cr3t", nil
+	})
+	got, err := ProcessWithClient(context.Background(),
+		"pw={{sops:secrets.yaml#db.password}}", Options{}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "pw=s3cr3t"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestSopsSourceTemplatedPath(t *testing.T) {
+	stubSops(t, func(path, key string) (string, error) {
+		if path != "secrets/dev.yaml" {
+			t.Fatalf("unexpected path %q", path)
+		}
+		return "v", nil
+	})
+	got, err := ProcessWithClient(context.Background(),
+		"{{sops:secrets/{{env | toLower}}.yaml#k}}", Options{Env: "DEV"}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "v"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestSopsSourceIsMasked(t *testing.T) {
+	stubSops(t, func(path, key string) (string, error) { return "topsecret", nil })
+	got, err := ProcessWithClient(context.Background(),
+		"{{sops:secrets.yaml#k}}", Options{Mask: true}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "***"; got != want {
+		t.Fatalf("sops value should be masked: want %q got %q", want, got)
+	}
+}
+
+func TestSopsMissingKeyDefaults(t *testing.T) {
+	stubSops(t, func(path, key string) (string, error) {
+		return "", aws.NotFound("key %s not found", key)
+	})
+	got, err := ProcessWithClient(context.Background(),
+		`{{sops:secrets.yaml#absent | default "fallback"}}`, Options{}, &stubAWS{})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "fallback"; got != want {
+		t.Fatalf("want %q got %q", want, got)
+	}
+}
+
+func TestSopsDecryptErrorPropagates(t *testing.T) {
+	stubSops(t, func(path, key string) (string, error) {
+		return "", errors.New("no matching keys found")
+	})
+	_, err := ProcessWithClient(context.Background(),
+		`{{sops:secrets.yaml#k | default "fallback"}}`, Options{}, &stubAWS{})
+	if err == nil {
+		t.Fatal("expected decryption error to propagate past default")
+	}
+}

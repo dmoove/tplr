@@ -15,6 +15,7 @@ import (
 
 	"github.com/Masterminds/sprig/v3"
 	"github.com/dmoove/tplr/internal/aws"
+	"github.com/dmoove/tplr/internal/sops"
 )
 
 // Default placeholder delimiters.
@@ -288,11 +289,35 @@ func (p *processor) resolveBase(spec string) baseResult {
 			return baseResult{handled: true, err: fmt.Errorf("read file %s: %w", path, err)}
 		}
 		return baseResult{value: strings.TrimRight(string(data), "\n"), handled: true}
+	case strings.HasPrefix(spec, "sops:"):
+		return p.resolveSops(strings.TrimPrefix(spec, "sops:"))
 	case strings.HasPrefix(spec, "cmd:"):
 		return p.resolveCmd(strings.TrimPrefix(spec, "cmd:"))
 	default:
 		return baseResult{handled: false}
 	}
+}
+
+// sopsDecrypt is the SOPS decryption entry point, indirected through a variable
+// so tests can stub it without real key material.
+var sopsDecrypt = sops.DecryptFile
+
+// resolveSops decrypts a SOPS file reference. The argument is a path with an
+// optional "#key" suffix selecting a dotted key path inside the decrypted
+// document (e.g. sops:secrets.yaml#db.password). The path is templated like the
+// other path-based sources; the key is taken verbatim.
+func (p *processor) resolveSops(arg string) baseResult {
+	var key string
+	if idx := strings.Index(arg, "#"); idx >= 0 {
+		key = arg[idx+1:]
+		arg = arg[:idx]
+	}
+	path, err := p.execTmpl(arg)
+	if err != nil {
+		return baseResult{handled: true, isSecret: true, err: err}
+	}
+	v, err := sopsDecrypt(path, key)
+	return baseResult{value: v, handled: true, isSecret: true, err: err}
 }
 
 func (p *processor) resolveCmd(arg string) baseResult {

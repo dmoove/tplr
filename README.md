@@ -13,6 +13,8 @@ A command line tool that replaces secret placeholders in configuration files.
 | `{{aws@REGION:secretsmanager:SECRET#KEY}}` | As above, but pinned to a specific AWS region |
 | `{{env:VAR}}` | Environment variable |
 | `{{file:/path}}` | File contents (trailing newline trimmed) |
+| `{{sops:/path}}` | Decrypted contents of a SOPS-encrypted file |
+| `{{sops:/path#KEY}}` | SOPS file decrypted, then a (dotted) key path extracted |
 | `{{cmd:COMMAND}}` | Standard output of a shell command (requires `--allow-exec`) |
 
 An AWS reference may pin a region inline with `aws@REGION:` (e.g.
@@ -24,6 +26,17 @@ The `cmd:` source runs an arbitrary shell command (`sh -c`) and is therefore
 disabled unless you pass `--allow-exec`. Because `|` is the shell pipe operator,
 a `cmd:` placeholder is taken verbatim and does not accept tplr modifiers
 (e.g. `{{cmd:echo hi | tr a-z A-Z}}` runs the whole pipeline).
+
+The `sops:` source decrypts a [SOPS](https://github.com/getsops/sops)-encrypted
+file. Decryption happens locally with whatever key material the `sops` CLI would
+use — AWS KMS via the default credential chain, an age key in `$SOPS_AGE_KEY` /
+`$SOPS_AGE_KEY_FILE`, a GnuPG keyring, etc. — so no extra configuration is
+needed. Without a `#KEY` suffix the whole decrypted document is returned (handy
+for rendering a decrypted file inline); with one, the value at that key is
+extracted. The key is a dot-separated path into the document
+(`{{sops:secrets.yaml#db.password}}`); the file format is inferred from its
+extension (`.yaml`/`.yml`, `.json`, `.env`/`.dotenv`). Like the AWS sources, a
+`sops:` value counts as a secret, so it is hidden by `--mask` and `--dry-run`.
 
 ### Modifiers
 
@@ -54,6 +67,7 @@ passwordSecretsManagerNoJSON: {{aws:secretsmanager:app/{{env | toLower}}/dbPassw
 passwordSecretsManagerJSON: {{aws:secretsmanager:app/{{env | toLower}}/db#Password}}
 apiUser: {{env:API_USER}}
 tlsCert: {{file:/etc/tls/cert.pem}}
+dbPasswordSops: {{sops:secrets/{{env | toLower}}.yaml#db.password}}
 gitSha: {{cmd:git rev-parse --short HEAD}}
 ```
 
@@ -111,8 +125,10 @@ to the same parameter/secret are looked up only once per run, and independent
 lookups are resolved in parallel.
 
 Supported sources are AWS SSM Parameter Store, AWS Secrets Manager, AWS S3,
-environment variables, files and (with `--allow-exec`) shell commands. Templates
-that use only `env`/`file`/`cmd` sources do not require AWS credentials.
+environment variables, files, SOPS-encrypted files and (with `--allow-exec`)
+shell commands. Templates that use only `env`/`file`/`cmd` sources do not require
+AWS credentials; `sops:` needs whatever key material decrypts the file (e.g. an
+age key, or AWS KMS credentials when the file is KMS-encrypted).
 
 ### Shell completion
 

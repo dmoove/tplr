@@ -1,0 +1,17 @@
+# Pulling secrets out of a SOPS-encrypted file. Decryption is local, using the
+# same key material the `sops` CLI would (AWS KMS, an age key in $SOPS_AGE_KEY,
+# a GnuPG keyring, ...), so no tplr-specific configuration is needed.
+#
+#   SOPS_AGE_KEY_FILE=~/keys.txt tplr --source example/sops.yml.tmpl --env prod
+#
+# Encrypt the referenced file first, e.g.:
+#   sops --encrypt --age <recipient> secrets/prod.dec.yaml > secrets/prod.yaml
+#
+# A '#key' suffix extracts a dotted path; without it the whole decrypted file is
+# returned. sops: values are secrets, so --mask / --dry-run hide them.
+database:
+  # Per-environment file: secrets/dev.yaml, secrets/prod.yaml, ...
+  password: {{sops:secrets/{{env | toLower}}.yaml#db.password | required "db.password missing in SOPS file"}}
+  port: {{sops:secrets/{{env | toLower}}.yaml#db.port | default "5432"}}
+api:
+  token: {{sops:secrets/{{env | toLower}}.yaml#api.token | quote}}
