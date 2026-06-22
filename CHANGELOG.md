@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/dmoove/tplr/compare/v0.6.0...v0.7.0) (2026-06-22)
+
+
+### Features
+
+* add SOPS-encrypted file source ([#17](https://github.com/dmoove/tplr/issues/17)) ([e2f80a3](https://github.com/dmoove/tplr/commit/e2f80a3ec482460ca637d6a276d6d1c967dd96d4))
+
 ## [0.6.0](https://github.com/dmoove/tplr/compare/v0.5.0...v0.6.0) (2026-06-17)
 
 
