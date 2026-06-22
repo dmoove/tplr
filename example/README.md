@@ -12,6 +12,7 @@ to check that every placeholder resolves.
 | [`modifiers.yml.tmpl`](modifiers.yml.tmpl) | The value-modifier pipeline: Sprig functions (`lower`, `upper`, `replace`, `trim`, `quote`, `b64enc`) plus `default`/`required` |
 | [`config.yml.tmpl`](config.yml.tmpl) | SSM, Secrets Manager, env, file and cmd sources; modifiers; per-environment paths |
 | [`secrets.env.tmpl`](secrets.env.tmpl) | Rendering a dotenv file, e.g. to seed a container at startup |
+| [`sops.yml.tmpl`](sops.yml.tmpl) | Decrypting a SOPS file with `sops:`, including dotted key extraction and `default`/`required`/`quote` modifiers |
 | [`multiregion.yml.tmpl`](multiregion.yml.tmpl) | Pinning a region per placeholder with `aws@REGION:`, including the European Sovereign Cloud |
 | [`helm-values.yaml.tmpl`](helm-values.yaml.tmpl) | Custom delimiters (`--left`/`--right`) so tplr coexists with `{{ }}` used by another tool |
 
@@ -46,6 +47,10 @@ tplr --source example/config.yml.tmpl --env dev --ignore-missing
 
 # Enable the cmd: source (runs shell commands from the template).
 API_USER=alice tplr --source example/local.conf.tmpl --allow-exec
+
+# Decrypt secrets from a SOPS file (key material comes from the environment,
+# e.g. an age key or AWS KMS credentials).
+SOPS_AGE_KEY_FILE=~/keys.txt tplr --source example/sops.yml.tmpl --env prod
 
 # Custom delimiters so {{ }} (e.g. Helm) is left alone.
 tplr --source example/helm-values.yaml.tmpl --left '[[' --right ']]' --env dev
