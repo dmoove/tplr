@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/dmoove/tplr/compare/v0.7.0...v0.7.1) (2026-06-23)
+
+
+### Bug Fixes
+
+* build with Go 1.25 toolchain ([#19](https://github.com/dmoove/tplr/issues/19)) ([e55890a](https://github.com/dmoove/tplr/commit/e55890ad17a36b49733e845024085488342617d9))
+
 ## [0.7.0](https://github.com/dmoove/tplr/compare/v0.6.0...v0.7.0) (2026-06-22)
 
 
